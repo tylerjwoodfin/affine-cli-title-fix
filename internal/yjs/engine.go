@@ -229,6 +229,79 @@ func (e *Engine) ApplyBase64Update(b64 string) (int, error) {
 	return int(val.ToInteger()), nil
 }
 
+// ApplyUpdate applies a raw Yjs update to a new Y.Doc and returns its handle ID.
+func (e *Engine) ApplyUpdate(raw []byte) (int, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.vm.Set("_updateBytes", raw)
+	val, err := e.vm.RunString(`
+		(function() {
+			var doc = new Y.Doc();
+			var arr = new Uint8Array(_updateBytes);
+			Y.applyUpdate(doc, arr);
+			var id = globalThis._docs.length;
+			globalThis._docs.push(doc);
+			return id;
+		})()
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("apply update: %w", err)
+	}
+	return int(val.ToInteger()), nil
+}
+
+// WorkspacePageTitles reads page id → display title from a workspace root Y.Doc
+// and optional docProperties Y.Doc (use propsDocID < 0 when the latter is unavailable).
+// Matches AFFiNE client behaviour: docProperties title overrides meta.pages entry.
+func (e *Engine) WorkspacePageTitles(workspaceDocID, propsDocID int) (map[string]string, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.vm.Set("_wsDocId", workspaceDocID)
+	e.vm.Set("_propsDocId", propsDocID)
+	val, err := e.vm.RunString(`
+		(function() {
+			var ws = globalThis._docs[_wsDocId];
+			if (!ws) return "{}";
+			var metaMap = ws.getMap("meta");
+			var meta = metaMap.toJSON ? metaMap.toJSON() : {};
+			var pages = Array.isArray(meta.pages) ? meta.pages : [];
+			var propsDoc = (_propsDocId >= 0) ? globalThis._docs[_propsDocId] : null;
+			var out = {};
+			for (var i = 0; i < pages.length; i++) {
+				var p = pages[i];
+				if (!p || p.trash) continue;
+				var id = p.id;
+				if (!id) continue;
+				var title = null;
+				if (propsDoc) {
+					var pm = propsDoc.getMap(id);
+					if (pm && pm.toJSON) {
+						var props = pm.toJSON();
+						if (props && props.title != null && props.title !== "") title = props.title;
+					}
+				}
+				if (title == null || title === "") title = p.title;
+				if (typeof title !== "string") {
+					if (title && typeof title === "object" && title.value) title = title.value;
+					else title = "";
+				}
+				out[id] = title || "";
+			}
+			return JSON.stringify(out);
+		})()
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("workspace page titles: %w", err)
+	}
+	result := make(map[string]string)
+	if err := json.Unmarshal([]byte(val.String()), &result); err != nil {
+		return nil, fmt.Errorf("parse title map: %w", err)
+	}
+	return result, nil
+}
+
 // ReadBlocks reads all blocks from a Y.Doc and returns them as JSON-friendly map.
 func (e *Engine) ReadBlocks(docID int) (map[string]map[string]any, error) {
 	e.mu.Lock()
