@@ -102,10 +102,10 @@ var docListCmd = &cobra.Command{
 		}
 		skipYjs, _ := cmd.Flags().GetBool("skip-yjs-titles")
 		if !skipYjs {
-			if titles, err := workspacetitles.FetchPageTitles(ctx(), cfg.BaseURL, ws, gql.Cookie(), gql.Bearer()); err == nil && len(titles) > 0 {
+			if titles, err := workspacetitles.FetchPageTitles(ctx(), cfg.BaseURL, ws, gql.Cookie(), gql.Bearer(), gql.ExtraHeaders()); err == nil && len(titles) > 0 {
 				data = workspacetitles.MergeDocListTitles(data, titles)
 			} else if err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: doc list title enrichment (Yjs): %v\n", err)
+				output.WarnWithCode("YJS_TITLE_ENRICHMENT_FAILED", "doc list title enrichment (Yjs): %v", err)
 			}
 		}
 		if fields := getFields(cmd); len(fields) > 0 {

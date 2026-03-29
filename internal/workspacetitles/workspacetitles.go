@@ -1,6 +1,5 @@
-// Package workspacetitles loads per-page display titles from AFFiNE workspace Yjs
-// snapshots (HTTP /api/workspaces/.../docs/...) and merges them into GraphQL doc list
-// responses where GraphQL leaves title null.
+// Package workspacetitles loads per-page data from AFFiNE workspace Yjs
+// snapshots (HTTP /api/workspaces/.../docs/...).
 package workspacetitles
 
 import (
@@ -15,9 +14,13 @@ import (
 	"github.com/tomohiro-owada/affine-cli/internal/yjs"
 )
 
-// FetchPageTitles downloads the workspace index and docProperties docs and returns
-// page ID → title. cookie and/or bearer are sent like the AFFiNE web app.
-func FetchPageTitles(ctx context.Context, baseURL, workspaceID, cookie, bearer string) (map[string]string, error) {
+type loadedYjs struct {
+	eng        *yjs.Engine
+	wsDocID    int
+	propsDocID int
+}
+
+func loadWorkspaceYjs(ctx context.Context, baseURL, workspaceID, cookie, bearer string, extraHeaders map[string]string) (*loadedYjs, error) {
 	if cookie == "" && bearer == "" {
 		return nil, fmt.Errorf("no session cookie or API token: cannot load workspace Yjs snapshot")
 	}
@@ -25,7 +28,7 @@ func FetchPageTitles(ctx context.Context, baseURL, workspaceID, cookie, bearer s
 	cli := &http.Client{Timeout: 60 * time.Second}
 
 	wsURL := fmt.Sprintf("%s/api/workspaces/%s/docs/%s", base, workspaceID, workspaceID)
-	body, err := getBody(ctx, cli, wsURL, cookie, bearer)
+	body, err := getBody(ctx, cli, wsURL, cookie, bearer, extraHeaders)
 	if err != nil {
 		return nil, fmt.Errorf("workspace snapshot: %w", err)
 	}
@@ -41,7 +44,7 @@ func FetchPageTitles(ctx context.Context, baseURL, workspaceID, cookie, bearer s
 
 	propsDocID := -1
 	propsURL := fmt.Sprintf("%s/api/workspaces/%s/docs/db$%s$docProperties", base, workspaceID, workspaceID)
-	propsBody, err := getBody(ctx, cli, propsURL, cookie, bearer)
+	propsBody, err := getBody(ctx, cli, propsURL, cookie, bearer, extraHeaders)
 	if err == nil && len(propsBody) > 0 {
 		pid, perr := eng.ApplyUpdate(propsBody)
 		if perr == nil {
@@ -49,13 +52,42 @@ func FetchPageTitles(ctx context.Context, baseURL, workspaceID, cookie, bearer s
 		}
 	}
 
-	return eng.WorkspacePageTitles(wsDocID, propsDocID)
+	return &loadedYjs{eng: eng, wsDocID: wsDocID, propsDocID: propsDocID}, nil
 }
 
-func getBody(ctx context.Context, cli *http.Client, urlStr, cookie, bearer string) ([]byte, error) {
+// FetchPageTitles downloads the workspace index and docProperties docs and returns
+// page ID → title. cookie and/or bearer are sent like the AFFiNE web app.
+// extraHeaders should match the GraphQL client (e.g. reverse-proxy auth from AFFINE_HEADERS_JSON).
+func FetchPageTitles(ctx context.Context, baseURL, workspaceID, cookie, bearer string, extraHeaders map[string]string) (map[string]string, error) {
+	w, err := loadWorkspaceYjs(ctx, baseURL, workspaceID, cookie, bearer, extraHeaders)
+	if err != nil {
+		return nil, err
+	}
+	return w.eng.WorkspacePageTitles(w.wsDocID, w.propsDocID)
+}
+
+// FetchPageList returns a JSON array of pages with id, title, parentId, createDate (non-trash only).
+func FetchPageList(ctx context.Context, baseURL, workspaceID, cookie, bearer string, extraHeaders map[string]string) (json.RawMessage, error) {
+	w, err := loadWorkspaceYjs(ctx, baseURL, workspaceID, cookie, bearer, extraHeaders)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := w.eng.WorkspacePageListJSON(w.wsDocID, w.propsDocID)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(raw), nil
+}
+
+func getBody(ctx context.Context, cli *http.Client, urlStr, cookie, bearer string, extraHeaders map[string]string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
 	if err != nil {
 		return nil, err
+	}
+	for k, v := range extraHeaders {
+		if k != "" && v != "" {
+			req.Header.Set(k, v)
+		}
 	}
 	if cookie != "" {
 		req.Header.Set("Cookie", cookie)

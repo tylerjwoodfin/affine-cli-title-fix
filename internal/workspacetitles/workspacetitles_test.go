@@ -1,7 +1,10 @@
 package workspacetitles
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -30,5 +33,31 @@ func TestMergeDocListTitles(t *testing.T) {
 	}
 	if n2["title"] != "Keep" {
 		t.Errorf("ghi title should stay Keep, got %v", n2["title"])
+	}
+}
+
+func TestGetBody_extraHeadersPrecedence(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Proxy-Auth") != "gateway-token" {
+			t.Errorf("X-Proxy-Auth = %q", r.Header.Get("X-Proxy-Auth"))
+		}
+		if r.Header.Get("Cookie") != "affine_session=abc" {
+			t.Errorf("Cookie = %q", r.Header.Get("Cookie"))
+		}
+		if r.Header.Get("Authorization") != "Bearer api" {
+			t.Errorf("Authorization = %q", r.Header.Get("Authorization"))
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	body, err := getBody(context.Background(), http.DefaultClient, srv.URL, "affine_session=abc", "api",
+		map[string]string{"X-Proxy-Auth": "gateway-token"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "ok" {
+		t.Fatalf("body = %q", body)
 	}
 }
